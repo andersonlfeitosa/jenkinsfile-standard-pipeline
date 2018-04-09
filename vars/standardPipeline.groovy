@@ -3,21 +3,29 @@ def call(body) {
     properties([
         durabilityHint('PERFORMANCE_OPTIMIZED')
     ])
-    
+
     node {
         // Clean workspace before doing anything        
         deleteDir()
+        
+        // Exporting Docker env variables
+        // Change this variables
+        env.DOCKER_HOST="tcp://192.168.99.100:2376"
+        env.DOCKER_CERT_PATH="/Users/" + env.USER + "/.docker/machine/machines/default"
 
         def VARS = checkout scm
 
-        if (!env.PBRANCH_NAME) {
-            env.PBRANCH_NAME = VARS.GIT_BRANCH
+        if (!env.BRANCH_NAME) {
+            env.BRANCH_NAME = VARS.GIT_BRANCH
         }
+        
+        env.BRANCH_NAME = get_branch_name(env.BRANCH_NAME);
 
         def COMMIT_MESSAGE = sh (script: 'git log -1 --pretty=%B',returnStdout: true).trim()
 
-        if(COMMIT_MESSAGE.contains("[maven-release-plugin]")) {
+        if(COMMIT_MESSAGE.startsWith("[maven-release-plugin]")) {
             currentBuild.result = 'FAILURE'
+            echo "Commit message starts with maven-release-plugin. Exiting..."
             sh "exit ./build.sh 1" 
         }
 
@@ -26,33 +34,44 @@ def call(body) {
 
         try {
             stage('Checkout') {
+                echo "===================================================="
+                echo "Checkout Stage"
+                echo "===================================================="
                 //checkout scm
-                echo "branch name = " + env.PBRANCH_NAME
-                sh 'git checkout ' + env.PBRANCH_NAME
-                echo "Commit message =  " + COMMIT_MESSAGE
+                echo "branch name = " + BRANCH_NAME
+                sh 'git checkout '+ BRANCH_NAME
                 echo "parameters = " + VERSION + " e " + NEXT_VERSION
             }
             stage('Build') {
-                echo "Initializing Build phase"
+                echo "===================================================="
+                echo "Build Stage"
+                echo "===================================================="
                 sh "mvn clean install -Dmaven.test.skip=true -Dmaven.javadoc.skip=true"
             }
             stage('Test') {
                 if(!branch_is_feature()) {
-                    echo "Initializing test phase"
+                    echo "===================================================="
+                    echo "Test Stage"
+                    echo "===================================================="
                     sh "mvn test"
                 }
             }
             stage ('Analyse') {
                 if(!branch_is_feature()) {
-                    echo "Initializing Analyse phase"
-                    withSonarQubeEnv('Sonar') {
+                    echo "===================================================="
+                    echo "Analyse Stage"
+                    echo "===================================================="
+                    withSonarQubeEnv('sonar') {
                         sh "mvn sonar:sonar"
                     }
                 }
             }
+            
             stage('Quality Gate') {
                  if(!branch_is_feature()) {
-                    echo "Initializing Quality Gate phase"
+                    echo "===================================================="
+                    echo "Quality Gate Stage"
+                    echo "===================================================="
                     timeout(time: 1, unit: 'HOURS') {
                         def qg = waitForQualityGate()
                         if (qg.status != 'OK') {
@@ -63,19 +82,19 @@ def call(body) {
             }
             stage('Archive') {
                 if(branch_is_master() || branch_is_hotfix()) {
-                    echo 'Initializing Archive phase'
+                    echo "===================================================="
+                    echo "Archive Stage"
+                    echo "===================================================="
                     sh 'mvn deploy -Dmaven.test.skip=true'
                 }
             }
+            
             stage ('Release') {
                 if(VERSION != NEXT_VERSION) {
-                    if(branch_is_master()) {
-                        echo 'Initializing Release phase'
-                        sh 'git checkout master'
-                        sh 'mvn -B release:prepare -DreleaseVersion=${VERSION} -DdevelopmentVersion=${NEXT_VERSION}'
-                    } else if(branch_is_hotfix()) {
-                        echo 'Initializing Release phase'
-                        sh 'git checkout '+PBRANCH_NAME
+                    if(branch_is_master() || branch_is_hotfix()) {
+                        echo "===================================================="
+                        echo "Release Stage"
+                        echo "===================================================="
                         sh 'mvn -B release:prepare -DreleaseVersion=${VERSION} -DdevelopmentVersion=${NEXT_VERSION}'
                     }
                 }
@@ -84,35 +103,40 @@ def call(body) {
             stage('Docker') {
                 if(VERSION != NEXT_VERSION) {
                     if(branch_is_master() || branch_is_hotfix()) {
-                        echo 'Initializing Docker phase'
-                        //sh "mvn package docker:build docker:push"
+                        echo "===================================================="
+                        echo "Docker Stage"
+                        echo "===================================================="
+                        sh "mvn package docker:build docker:push"
                     }
                 }
             }
-        } catch (err) {
+        } catch (error) {
             currentBuild.result = 'FAILED'
-            throw err
+            throw error
         }
     }
 }
 
+def String get_branch_name(branch_name) {
+    return branch_name.replaceAll("origin/", "").trim();
+}
 
 def Boolean branch_is_feature() {
-    return test_branch_name("origin/feature/")
+    return test_branch_name("feature/")
 }
 
 def Boolean branch_is_master() {
-    return test_branch_name("origin/master")
+    return test_branch_name("master")
 }
 
 def Boolean branch_is_develop() {
-    return test_branch_name("origin/develop")
+    return test_branch_name("develop")
 }
 
 def Boolean branch_is_hotfix() {
-    return test_branch_name("origin/hotfix/")
+    return test_branch_name("hotfix/")
 }
 
 def Boolean test_branch_name(branch) {
-    return env.PBRANCH_NAME.startsWith(branch)
+    return env.BRANCH_NAME.startsWith(branch)
 }
