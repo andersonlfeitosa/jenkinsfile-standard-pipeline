@@ -100,7 +100,7 @@ def call(body) {
                             echo "===================================================="
                             echo "Docker Stage"
                             echo "===================================================="
-                            sh "mvn package docker:build docker:push"
+                            //sh "mvn package docker:build docker:push"
                         }
                     }
                 }
